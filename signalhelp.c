@@ -3,7 +3,7 @@
  * Author:  Qinyu Tong
  *          qtong@andrew.cmu.edu
  *
- * Date:Tue Jan 20 15:48:47 EST 2015 
+ * Date:Fri May  1 22:37:40 EDT 2015
  *
  * This program provides a signal handler service for Linux system. In this
  * assignment, the help feature which outputs a description of a specified 
@@ -20,14 +20,16 @@
  * working directory.
  */
 #include <unistd.h>
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <limits.h>
 #include <errno.h>
 
 #define SIG_ID_SIZE 6
-#define SIG_DSP_SIZE 100
+#define SIG_DSP_SIZE 1000
+#define PATH_LENGTH 100
+#define BUFF_SIZE 100
 
 struct entry {
     int sig_num;
@@ -45,22 +47,49 @@ int main(int argc, const char* argv[]){
     char *pathvar;
     pathvar = getenv("DATA_PATH");
 
+	char buffer[PATH_LENGTH];
+	int i = 0;
+
     if (argc != 2){
         printf("Usage: %s database_file\n",argv[0]);
         return 0;
     }
 
+	//Validation file name, eliminate path vulnerability
+	//detect illegale filename, which contains '/'
+	while (argv[1][i] != '\0' ) { 
+    	if (argv[1][i] == '/'){
+			printf("illegal filename! only filename is allowed, no path/directory allowed\n");
+			exit(0); //handle erro
+		}			
+		i++; 
+	}
+
     if (pathvar == NULL)
         sig_count = read_sigdb(argv[1],&sig_table);
-    else
-        sig_count = read_sigdb(pathvar,&sig_table);
+    else{
+		if (strlen(argv[1]) > PATH_LENGTH - strlen(pathvar) - 1){
+			printf("path length exceed PATH_LENGTH\n");
+			exit(0); //handle erro
+		}
+		strcat(buffer,pathvar);
+		strcat(buffer,"/");
+		strcat(buffer,argv[1]);
+        sig_count = read_sigdb(buffer,&sig_table);
+	}
 
     if (sig_table != NULL){
         //drop privilege
         if (setresuid(getuid(), getuid(), getuid()) < 0) {
-            printf("drop privilege error");
-            exit(0);
+            printf("drop privilege error\n");
+            exit(0); //handle error
         }
+		
+		if (setuid(0) != -1) {
+    		/* Privileges can be restored, handle error */
+			printf("privileges can be restored\n");
+			exit(0);
+  		}
         query_sigdb(sig_count, sig_table);
         free(sig_table);
     }
@@ -78,14 +107,18 @@ int read_sigdb(const char* pathname, struct entry** sig_table){
     fp = fopen(pathname, mode);
     if (fp == NULL){
         fprintf(stderr, "Can't open input file %s!\n",pathname);
-        exit(0);
+        exit(0); //handle erro
     }
 
-    fscanf(fp,"%d",&sig_count);
+    if (fscanf(fp,"%d",&sig_count) != 1){
+		printf("bad database file\n");		
+		exit(0);
+	}
     
-    if (sig_count > SIZE_MAX/sizeof(struct entry)){
+	size_t max_size = (size_t)-1;
+    if (sig_count > max_size/sizeof(struct entry)){
         printf("memory to allocate exceed the size of size_t, wrap around will happen, exit");
-        exit(0);
+        exit(0); //handle erro
     }
 
     *sig_table = (struct entry *)malloc(sig_count*sizeof(struct entry));
@@ -95,7 +128,10 @@ int read_sigdb(const char* pathname, struct entry** sig_table){
     else{
 
         for( i = 0; i < sig_count && !feof(fp); i++){
-            fscanf(fp,"%d%s%[^\n]",&((*sig_table)[i].sig_num),(*sig_table)[i].sig_ID,(*sig_table)[i].sig_dsp);
+             if (fscanf(fp,"%d%s%[^\n]",&((*sig_table)[i].sig_num),(*sig_table)[i].sig_ID,(*sig_table)[i].sig_dsp) != 3){
+				printf("bad db file\n");
+				exit(0);
+			 } 
         }
 
         sig_count = i < sig_count ? i : sig_count; // if file ends in advance
@@ -106,27 +142,31 @@ int read_sigdb(const char* pathname, struct entry** sig_table){
     return sig_count;
 }
 
+void build_sig_table(FILE* fp, int* sig_num, char* sig_ID, char *sig_dsp){
+	
+}
+
 /*
  * return 0 to indicate ignore the value, -1 to indicate 'quit'
  */
 
 int read_signum(){
-    char buff[25];
+    char buff[BUFF_SIZE];
     char *end_ptr;
     long num_long;
-    
+
     if (fgets(buff, sizeof(buff), stdin) == NULL) {
         if (puts("EOF or read error\n") == EOF) {
-            /* Handle error */
+            exit(0); //handle erro
         }
-    } else {
+    }
+	else {
         errno = 0;
-        
         num_long = strtol(buff, &end_ptr, 10);
         
         if (ERANGE == errno) {
             if (puts("number out of range") == EOF) {
-                /* Handle error */
+                exit(0); //handle erro
             }
             return 0;
         }
@@ -134,32 +174,32 @@ int read_signum(){
             
             if (buff[0] == 'q') {
                 if (puts("quit") == EOF) {
-                    /* Handle error */
+                    exit(0); //handle erro
                 }
                 return -1;
             }
             if (puts("not valid numeric input") == EOF) {
-                /* Handle error */
+                exit(0); //handle erro
             }
             return 0;
         }
         else if ('\n' != *end_ptr && '\0' != *end_ptr) {
             if (puts("extra characters on input line") == EOF) {
-                /* Handle error */
+                exit(0); //handle erro
             }
             return 0;
         }
         
         if (num_long <= INT_MAX){
             if(num_long <= 0){
-                printf("sig number should be positive number");
+                printf("sig number should be positive number\n");
                 return 0;
             }
             return (int)num_long;
         }
         else{
             if (puts("out of int type range") == EOF) {
-                /* Handle error */
+                exit(0); //handle erro
             }
             return 0;
         }
@@ -176,8 +216,10 @@ void query_sigdb(int sig_count, struct entry* sig_table){
     
     
         while((sig_num = read_signum()) != -1){
-            if (sig_num == 0)
-                continue;
+            if (sig_num == 0){
+				continue;
+			}
+                
             for(i = 0; i < sig_count; i++){
                 if (sig_table[i].sig_num == sig_num){
                     printf("%d %s%s\n",sig_table[i].sig_num,sig_table[i].sig_ID,sig_table[i].sig_dsp);
